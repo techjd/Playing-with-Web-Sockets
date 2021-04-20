@@ -1,0 +1,149 @@
+const app = require('express')();
+const bodyParser = require('body-parser');
+const connectDB = require('./utils/db');
+const httpServer = require('http').createServer(app);
+const io = require('socket.io')(httpServer);
+const PORT_NO = 3000;
+const formatMessage = require('./utils/messages');
+const usersR = require('./routes/userRoutes');
+const Conversations = require('./models/conversations');
+const Messages = require('./models/messages');
+const OnlineUsers = require('./models/onlineUsers');
+const Users = require('./models/users');
+const FINAL_NAME = 'BOT';
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+
+connectDB();
+
+let socketsId = [];
+let users = [];
+
+io.on('connection', (socket) => {
+  console.log('New WS Connection');
+  console.log(socket.id);
+  socketsId.push(socket.id);
+
+  socket.emit('id', socket.id);
+
+  console.log(socketsId);
+  // Welcome Current User
+  socket.emit(
+    'message',
+    formatMessage(FINAL_NAME, 'Welcome To TECH JD Chat App')
+  );
+
+  // BroadCast When A User Connects
+  socket.on('userJoined', async (userDetails) => {
+    console.log(userDetails);
+    // const newUser = userDetails;
+    users.push(userDetails);
+    let user = await OnlineUsers.findById(userDetails.id);
+    if (user) {
+    } else {
+      user = OnlineUsers({
+        userId: userDetails.id,
+        socketId: userDetails.socketId,
+      });
+
+      await user.save();
+    }
+    // if ((userDetails = {})) {
+    // } else {
+    //   users.push(newUser);
+    // }
+    // console.log(`${username} has joined`);
+    // socket.broadcast.emit(
+    //   'message',
+    //   formatMessage(FINAL_NAME, `${userDetails.name} has joined the chat`)
+    // );
+    let allUsers = await OnlineUsers.find({}, (err, users) => {
+      if (err) {
+      } else {
+        io.emit('users', users);
+        console.log(users);
+      }
+    });
+  });
+
+  // Runs when client Disconnects
+  socket.on('userLeft', (userDetails) => {
+    console.log(`${userDetails.name} has left the chat `);
+    console.log(`${userDetails.socketId} has left the chat `); // io.emit(
+    //   'message',
+    //   formatMessage(FINAL_NAME, `${username} has left the chat`)
+    // );
+    for (let index = 0; index < users.length; index++) {
+      if (users[index].socketId === userDetails.socketId) {
+        users.splice(index, 1);
+        socketsId.splice(socketsId.indexOf(userDetails.socketId), 1);
+      }
+    }
+    io.emit('users', users);
+  });
+
+  // Listen For Chat Message
+  socket.on('chatMessage', (msg) => {
+    io.to(msg.to).emit('message', formatMessage(msg.name, msg.message));
+    // socket.broadcast.emit('message', formatMessage(msg.name, msg.message));
+  });
+});
+
+app.use('/api/v1/user', usersR);
+
+httpServer.listen(PORT_NO, () => {
+  console.log(`Server is Running on ${PORT_NO}`);
+});
+
+
+    let user = await OnlineUsers.findById(msg.to);
+    if (user) {
+      let conversation = await Conversations.find({
+        $and: [{ from: msg.from }, { to: msg.to }],
+      });
+      if (conversation) {
+        await Messages.find(
+          { conversationId: conversation._id },
+          (err, messages) => {
+            if (err) {
+            } else {
+              io.to(msg.to).emit('message', messages);
+            }
+          }
+        );
+      } else {
+        conversation = Conversations({
+          lastMessage: msg.text,
+          from: msg.from,
+          to: msg.to,
+        });
+
+        await conversation.save();
+        
+        await Messages.find(
+          { conversationId: conversation._id },
+          (err, messages) => {
+            if (err) {
+            } else {
+              io.to(msg.to).emit('message', messages);
+            }
+          }
+        );
+      }
+
+      io.to(msg.to).emit('message', formatMessage(msg.name, msg.message));
+    } else {
+      let conversation = await Conversations.find({
+        $and: [{ from: msg.from }, { to: msg.to }],
+      });
+      if (conversation) {
+        let message = new Messages({
+          conversationId: conversation._id,
+          from: msg.from,
+          to: msg.to,
+        });
+
+        await message.save();
+      }
+    }
