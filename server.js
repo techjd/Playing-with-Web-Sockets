@@ -11,7 +11,7 @@ const Messages = require('./models/messages');
 const OnlineUsers = require('./models/onlineUsers');
 const Users = require('./models/users');
 const FINAL_NAME = 'BOT';
-
+const mongoose = require('mongoose');
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -26,18 +26,24 @@ io.on('connection', (socket) => {
   socketsId.push(socket.id);
 
   socket.emit('id', socket.id);
+  // for (let index = 0; index < socketsId.length; index++) {
+  //   if (socketsId[index] === socket.id) {
+  //     sockets.splice(index, 1);
 
+  //     socketsId.splice(socketsId.indexOf(userDetails.socketId), 1);
+  //   }
+  // }
   // console.log(socketsId);
   // Welcome Current User
-  socket.emit(
-    'message',
-    formatMessage(FINAL_NAME, 'Welcome To TECH JD Chat App')
-  );
+  // socket.emit(
+  //   'message',
+  //   formatMessage(FINAL_NAME, 'Welcome To TECH JD Chat App')
+  // );
 
   // When a frag is createed Again
   socket.on('createdAgain', async (userDetails) => {
     await OnlineUsers.find({})
-      .populate('chatusers')
+      .populate('userId', '-password -createdAt -updatedAt -__v')
       .exec((err, users) => {
         if (err) {
         } else {
@@ -51,9 +57,7 @@ io.on('connection', (socket) => {
   // BroadCast When A User Connects
   socket.on('userJoined', async (userDetails) => {
     console.log('user Joined Called');
-    // console.log(userDetails);
-    // const newUser = userDetails;
-    // users.push(userDetails);
+
     let user = await OnlineUsers.findOne({ socketId: userDetails.socketId });
     if (user) {
     } else {
@@ -65,7 +69,7 @@ io.on('connection', (socket) => {
       await user.save();
 
       await OnlineUsers.find({})
-        .populate('chatusers')
+        .populate('userId', '-password -createdAt -updatedAt -__v')
         .exec((err, users) => {
           if (err) {
           } else {
@@ -84,56 +88,126 @@ io.on('connection', (socket) => {
       //   }
       // });
     }
+
+    // console.log(userDetails);
+    // const newUser = userDetails;
+    // users.push(userDetails);
   });
 
   // Runs when client Disconnects
   socket.on('userLeft', async (userDetails) => {
-    await OnlineUsers.findOneAndDelete({ socketId: userDetails.socketId });
+    await OnlineUsers.deleteMany({ socketId: userDetails.socketId });
+    // await OnlineUsers.findByIdAndDelete();
+    // await OnlineUsers.findOneAndDelete({ socketId: userDetails.socketId });
 
     // await OnlineUsers.findByIdAndDelete(userDetails.id);
 
-    await OnlineUsers.find({}, (err, users) => {
-      if (err) {
-      } else {
-        io.emit('users', users);
-        console.log(users);
-      }
-    });
+    await OnlineUsers.find({})
+      .populate('userId', '-password -createdAt -updatedAt -__v')
+      .exec((err, users) => {
+        if (err) {
+        } else {
+          // socket.broadcast.emit('users', users);
+          io.emit('users', users);
+
+          // console.log(users);
+        }
+      });
+
+    // await OnlineUsers.find({}, (err, users) => {
+    //   if (err) {
+    //   } else {
+    //     io.emit('users', users);
+    //     console.log(users);
+    //   }
+    // });
 
     // console.log(`${userDetails.name} has left the chat `);
     // console.log(`${userDetails.socketId} has left the chat `); // io.emit(
     // //   'message',
     // //   formatMessage(FINAL_NAME, `${username} has left the chat`)
     // // );
-    // for (let index = 0; index < users.length; index++) {
-    //   if (users[index].socketId === userDetails.socketId) {
-    //     users.splice(index, 1);
-    //     socketsId.splice(socketsId.indexOf(userDetails.socketId), 1);
-    //   }
-    // }
+
     // io.emit('users', users);
   });
 
   // Emit All Chat Messages when User Navigates to Chat Activity
   socket.on('navigate', async (userDet) => {
+    /*
+    from -> userDet.from
+    to -> userDet.to
+    */
     console.log('Called Navigate');
     console.log(userDet);
-    let messages = await Messages.find({
-      $or: [
-        {
-          $or: [{ from: userDet.from }, { to: userDet.to }],
+    await Messages.aggregate([
+      {
+        $lookup: {
+          from: 'chatusers',
+          localField: 'to',
+          foreignField: '_id',
+          as: 'toObj',
         },
-        {
-          $or: [{ to: userDet.from }, { from: userDet.to }],
+      },
+      {
+        $lookup: {
+          from: 'chatusers',
+          localField: 'from',
+          foreignField: '_id',
+          as: 'fromObj',
         },
-      ],
-    });
-
-    if (messages.length == 0) {
-    } else {
-      console.log(messages);
-      socket.emit('message', messages);
-    }
+      },
+    ])
+      .match({
+        $or: [
+          {
+            $and: [
+              { to: mongoose.Types.ObjectId(userDet.to) },
+              { from: mongoose.Types.ObjectId(userDet.from) },
+            ],
+          },
+          {
+            $and: [
+              { to: mongoose.Types.ObjectId(userDet.from) },
+              { from: mongoose.Types.ObjectId(userDet.to) },
+            ],
+          },
+        ],
+      })
+      .project({
+        'toObj.password': 0,
+        'toObj.__v': 0,
+        'fromObj.password': 0,
+        'fromObj.__v': 0,
+      })
+      .exec((err, msgs) => {
+        if (err) {
+        } else {
+          socket.emit('message', msgs);
+        }
+      });
+    // let messages = await Messages.find({
+    //   $or: [
+    //     {
+    //       $or: [{ from: userDet.from }, { to: userDet.to }],
+    //     },
+    //     {
+    //       $or: [{ to: userDet.from }, { from: userDet.to }],
+    //     },
+    //   ],
+    // })
+    //   .populate('from', '-password -createdAt -updatedAt -__v')
+    //   .populate('to', '-password -createdAt -updatedAt -__v')
+    //   .exec((err, msgs) => {
+    //     if (err) {
+    //     } else {
+    //       if (msgs.length == 0) {
+    //       } else {
+    //         console.log(msgs);
+    //         socket.emit('message', msgs);
+    //       }
+    //       // console.log(msgs);
+    //     }
+    //   });
 
     // io.to(msg.to).emit('message', formatMessage(msg.name, msg.message));
   });
@@ -158,9 +232,55 @@ io.on('connection', (socket) => {
       });
 
       await newMessage.save();
-      console.log(newMessage);
+      // console.log(newMessage);
 
-      io.to(user.socketId).emit('message', newMessage);
+      await Messages.aggregate([
+        {
+          $lookup: {
+            from: 'chatusers',
+            localField: 'to',
+            foreignField: '_id',
+            as: 'toObj',
+          },
+        },
+        {
+          $lookup: {
+            from: 'chatusers',
+            localField: 'from',
+            foreignField: '_id',
+            as: 'fromObj',
+          },
+        },
+      ])
+        .match({
+          _id: mongoose.Types.ObjectId(newMessage._id),
+        })
+        .project({
+          'toObj.password': 0,
+          'toObj.__v': 0,
+          'fromObj.password': 0,
+          'fromObj.__v': 0,
+        })
+        .exec((err, msg) => {
+          if (err) {
+          } else {
+            io.to(user.socketId).emit('message', msg[0]);
+
+            // res.json(user);
+          }
+        });
+
+      // let Message = Messages.findById(newMessage._id)
+      //   .populate('from', '-password -createdAt -updatedAt -__v')
+      //   .populate('to', '-password -createdAt -updatedAt -__v')
+      //   .exec((err, msg) => {
+      //     if (err) {
+      //     } else {
+      //       io.to(user.socketId).emit('message', msg);
+      //       // res.json(msgs);
+      //       // console.log(msgs);
+      //     }
+      //   });
     } else {
       let newMessage = new Messages({
         from: msg.from,
@@ -170,8 +290,55 @@ io.on('connection', (socket) => {
 
       await newMessage.save();
 
-      console.log(newMessage);
-      socket.emit('message', newMessage);
+      await Messages.aggregate([
+        {
+          $lookup: {
+            from: 'chatusers',
+            localField: 'to',
+            foreignField: '_id',
+            as: 'toObj',
+          },
+        },
+        {
+          $lookup: {
+            from: 'chatusers',
+            localField: 'from',
+            foreignField: '_id',
+            as: 'fromObj',
+          },
+        },
+      ])
+        .match({
+          _id: mongoose.Types.ObjectId(newMessage._id),
+        })
+        .project({
+          'toObj.password': 0,
+          'toObj.__v': 0,
+          'fromObj.password': 0,
+          'fromObj.__v': 0,
+        })
+        .exec((err, msg) => {
+          if (err) {
+          } else {
+            io.to(user.socketId).emit('message', msg[0]);
+
+            // res.json(user);
+          }
+        });
+
+      // let Message = Messages.findById(newMessage._id)
+      //   .populate('from', '-password -createdAt -updatedAt -__v')
+      //   .populate('to', '-password -createdAt -updatedAt -__v')
+      //   .exec((err, msg) => {
+      //     if (err) {
+      //     } else {
+      //       io.to(user.socketId).emit('message', msg);
+      //       // res.json(msgs);
+      //       // console.log(msgs);
+      //     }
+      //   });
+      // console.log(newMessage);
+      // socket.emit('message', newMessage);
     }
 
     // socket.broadcast.emit('message', formatMessage(msg.name, msg.message));
@@ -181,7 +348,7 @@ io.on('connection', (socket) => {
 app.use('/api/v1/user', usersR);
 
 app.get('/user', async (req, res) => {
-  await OnlineUsers.findById('607c471d70a4af18f47bc0b2')
+  await OnlineUsers.findById('6096e90c6c8bb300f4398bb4')
     .populate('userId', '-password -createdAt -updatedAt -__v')
     .exec((err, user) => {
       res.json(user);
@@ -197,7 +364,19 @@ app.get('/single', async (req, res) => {
     });
 });
 
+app.get('/getChatUsers', async (req, res) => {
+  let user = await Users.find()
+    .select('-password')
+    .exec((err, users) => {
+      if (err) {
+      } else {
+        res.json(users);
+      }
+    });
+});
+
 app.get('/test', async (req, res) => {
+  // https://proandroiddev.com/how-to-draw-a-custom-view-9da8016fe94#:~:text=How%20to%20draw%20a%20circle,the%20height%20of%20the%20bar.
   // Working
   // let messages = await Messages.find({
   //   $or: [
@@ -205,21 +384,114 @@ app.get('/test', async (req, res) => {
   //     { to: '607a7ace8830e818306f4bc4' },
   //   ],
   // });
+  // await Messages.aggregate([
+  //   {
+  //     $match: {
+  //       $or: [
+  //         {
+  //           $or: [
+  //             { from: '60978d609855dc1e8cd18883' },
+  //             { to: '60978dad9855dc1e8cd18885' },
+  //           ],
+  //         },
+  //         {
+  //           $or: [
+  //             { to: '60978dad9855dc1e8cd18885' },
+  //             { from: '60978d609855dc1e8cd18883' },
+  //           ],
+  //         },
+  //       ],
+  //     },
+  //   },
+  // ]).exec((err, msgs) => {
+  //   if (err) {
+  //   } else {
+  //     res.json(msgs);
+  //     // console.log(msgs);
+  //   }
+  // });
+  await Messages.aggregate([
+    {
+      $lookup: {
+        from: 'chatusers',
+        localField: 'to',
+        foreignField: '_id',
+        as: 'toObj',
+      },
+    },
+    {
+      $lookup: {
+        from: 'chatusers',
+        localField: 'from',
+        foreignField: '_id',
+        as: 'fromObj',
+      },
+    },
+  ])
+    .match({
+      $or: [
+        {
+          $and: [
+            { to: mongoose.Types.ObjectId('60978dad9855dc1e8cd18885') },
+            { from: mongoose.Types.ObjectId('6097c6702466a20538e28826') },
+          ],
+        },
+        {
+          $and: [
+            { to: mongoose.Types.ObjectId('6097c6702466a20538e28826') },
+            { from: mongoose.Types.ObjectId('60978dad9855dc1e8cd18885') },
+          ],
+        },
+      ],
+    })
+    .project({
+      'toObj.password': 0,
+      'toObj.__v': 0,
+      'fromObj.password': 0,
+      'fromObj.__v': 0,
+    })
+    .exec((err, msgs) => {
+      if (err) {
+      } else {
+        res.json(msgs);
+      }
+    });
+
+  // { $and: [{ to: user1 }, { from: user2 }] },
+  // { $and: [{ to: user2 }, { from: user1 }] },
+  // let messages = await Messages.find({})
+  //   .populate('from', '-password -createdAt -updatedAt -__v')
+  //   .populate('to', '-password -createdAt -updatedAt -__v')
+  //   .exec((err, msgs) => {
+  //     if (err) {
+  //     } else {
+  //       res.json(msgs);
+  //       // console.log(msgs);
+  //     }
+  //   });
+
+  /*
+
+
+         $or: [
+          { from: '60978d609855dc1e8cd18883' },
+          { to: '6097c6702466a20538e28826' },
+        ],
 
   let messages = await Messages.find({
     $or: [
       {
         $or: [
-          { from: '6079e797aab61332405cd40b' },
-          { to: '607a7ace8830e818306f4bc4' },
+          { from: '60978d609855dc1e8cd18883' },
+          { to: '6097c6702466a20538e28826' },
         ],
       },
-      {
-        $or: [
-          { to: '6079e797aab61332405cd40b' },
-          { from: '607a7ace8830e818306f4bc4' },
-        ],
-      },
+      // {
+      //   $or: [
+      //     { to: '60978dad9855dc1e8cd18885' },
+      //     { from: '60978d609855dc1e8cd18883' },
+      //   ],
+      // },
     ],
   })
     .populate('from', '-password -createdAt -updatedAt -__v')
@@ -231,6 +503,7 @@ app.get('/test', async (req, res) => {
         // console.log(msgs);
       }
     });
+    */
 
   // let messages = await Messages.aggregate([
   //   {
@@ -266,6 +539,56 @@ app.get('/test', async (req, res) => {
   // console.log(findUser);
 });
 
+app.get('/singleMessage', async (req, res) => {
+  await Messages.aggregate([
+    {
+      $lookup: {
+        from: 'chatusers',
+        localField: 'to',
+        foreignField: '_id',
+        as: 'toObj',
+      },
+    },
+    {
+      $lookup: {
+        from: 'chatusers',
+        localField: 'from',
+        foreignField: '_id',
+        as: 'fromObj',
+      },
+    },
+  ])
+    .match({
+      _id: mongoose.Types.ObjectId('60978def9855dc1e8cd18887'),
+    })
+    .project({
+      'toObj.password': 0,
+      'toObj.__v': 0,
+      'fromObj.password': 0,
+      'fromObj.__v': 0,
+    })
+    .exec((err, user) => {
+      if (err) {
+      } else {
+        // console.log(user[0]);
+        res.json(user[0]);
+      }
+    });
+});
+
+app.get('/getSingle', async (req, res) => {
+  let Message = Messages.findById('6096da9f6c8bb300f4398b97')
+    .populate('from', '-password -createdAt -updatedAt -__v')
+    .populate('to', '-password -createdAt -updatedAt -__v')
+    .exec((err, msg) => {
+      if (err) {
+      } else {
+        // io.to(user.socketId).emit('message', msg);
+        res.json(msg);
+        // console.log(msgs);
+      }
+    });
+});
 httpServer.listen(PORT_NO, () => {
   console.log(`Server is Running on ${PORT_NO}`);
 });
